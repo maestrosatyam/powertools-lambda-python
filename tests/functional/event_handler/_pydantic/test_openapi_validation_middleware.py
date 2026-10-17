@@ -3635,6 +3635,46 @@ def test_file_upload_non_base64_emits_warning(gw_event):
     assert "Binary Media Types" in str(w[0].message)
 
 
+@pytest.mark.parametrize("text", ["café", "price: 5€"])
+def test_file_upload_non_base64_utf8_text(gw_event, text):
+    """Test that non-ASCII text in a multipart body without base64 encoding is read as UTF-8."""
+    from aws_lambda_powertools.event_handler.openapi.params import File
+
+    app = APIGatewayRestResolver(enable_validation=True)
+
+    @app.post("/upload")
+    def upload(description: Annotated[str, Form()], file_data: Annotated[bytes, File()]):
+        return {"description": description, "content": file_data.decode("utf-8")}
+
+    boundary = "----TestBoundary"
+    raw_body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="description"\r\n'
+        "\r\n"
+        f"{text}\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file_data"; filename="test.txt"\r\n'
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        f"{text}\r\n"
+        f"--{boundary}--\r\n"
+    )
+
+    # Without Binary Media Types, API Gateway passes the body as a UTF-8 string
+    gw_event["httpMethod"] = "POST"
+    gw_event["path"] = "/upload"
+    gw_event["headers"]["content-type"] = f"multipart/form-data; boundary={boundary}"
+    gw_event["body"] = raw_body
+    gw_event["isBase64Encoded"] = False
+
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        result = app(gw_event, {})
+
+    assert result["statusCode"] == 200
+    assert json.loads(result["body"]) == {"description": text, "content": text}
+
+
 def test_file_upload_non_base64_binary_content(gw_event):
     """Test file upload with raw binary bytes (e.g. JPEG) without base64 encoding."""
     from aws_lambda_powertools.event_handler.openapi.params import File
@@ -3643,7 +3683,7 @@ def test_file_upload_non_base64_binary_content(gw_event):
 
     @app.post("/upload")
     def upload(file_data: Annotated[bytes, File()]):
-        return {"size": len(file_data)}
+        return {"content": base64.b64encode(file_data).decode()}
 
     # Simulate binary content with bytes that are NOT valid UTF-8 (like JPEG header 0xFF 0xD8)
     binary_content = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
@@ -3659,19 +3699,23 @@ def test_file_upload_non_base64_binary_content(gw_event):
         + f"\r\n--{boundary}--\r\n".encode("latin-1")
     )
 
-    # Without binary mode, API Gateway passes body as latin-1 compatible string
+    # Without Binary Media Types, API Gateway passes the body as a UTF-8 string and
+    # replaces invalid bytes, so binary content can't be recovered
     gw_event["httpMethod"] = "POST"
     gw_event["path"] = "/upload"
     gw_event["headers"]["content-type"] = f"multipart/form-data; boundary={boundary}"
-    gw_event["body"] = raw_bytes.decode("latin-1")
+    gw_event["body"] = raw_bytes.decode("utf-8", errors="replace")
     gw_event["isBase64Encoded"] = False
 
-    with warnings.catch_warnings(record=True):
+    with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         result = app(gw_event, {})
 
+    # The request is still parsed, and the warning points to the Binary Media Types setting
     assert result["statusCode"] == 200
-    assert json.loads(result["body"]) == {"size": len(binary_content)}
+    received = base64.b64decode(json.loads(result["body"])["content"])
+    assert received == binary_content.decode("utf-8", errors="replace").encode()
+    assert any("Binary Media Types" in str(warning.message) for warning in w)
 
 
 def test_upload_file_with_metadata(gw_event):

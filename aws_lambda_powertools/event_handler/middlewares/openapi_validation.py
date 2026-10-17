@@ -231,9 +231,9 @@ class OpenAPIRequestValidationMiddleware(BaseMiddlewareHandler):
                     "api-gateway-payload-encodings.html",
                     stacklevel=2,
                 )
-                # Use latin-1 to preserve all byte values (0-255) since the body
-                # may contain raw binary data that isn't valid UTF-8
-                body_bytes = raw_body.encode("latin-1")
+                # API Gateway passes bodies it doesn't treat as binary as UTF-8 text,
+                # so encoding back to UTF-8 restores the bytes of text parts
+                body_bytes = raw_body.encode("utf-8")
 
             return _parse_multipart_body(body_bytes, boundary)
 
