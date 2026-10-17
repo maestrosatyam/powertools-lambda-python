@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from typing import Any
 
@@ -911,6 +912,68 @@ async def test_asgi_binary_response():
     # THEN it decodes base64 and returns binary data
     assert captured["status_code"] == 200
     assert captured["body"] == binary_data
+
+
+@pytest.mark.asyncio
+async def test_asgi_binary_request_body():
+    # GIVEN an app that echoes the raw request body back
+    app = HttpResolverLocal()
+    binary_data = b"\x89PNG\r\n\x1a\n\x00\xff"  # not valid UTF-8
+
+    @app.post("/echo")
+    def echo():
+        assert app.current_event.is_base64_encoded is True
+        return Response(
+            status_code=200,
+            content_type="application/octet-stream",
+            body=base64.b64decode(app.current_event.body),
+        )
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/echo",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/octet-stream")],
+    }
+
+    receive = make_asgi_receive(binary_data)
+    send, captured = make_asgi_send()
+
+    # WHEN called via ASGI interface with a binary body
+    await app(scope, receive, send)
+
+    # THEN the body reaches the handler base64-encoded and unchanged
+    assert captured["status_code"] == 200
+    assert captured["body"] == binary_data
+
+
+@pytest.mark.asyncio
+async def test_asgi_text_request_body_is_not_base64_encoded():
+    # GIVEN an app that returns the request body as received
+    app = HttpResolverLocal()
+
+    @app.post("/echo")
+    def echo():
+        return {"body": app.current_event.body, "is_base64_encoded": app.current_event.is_base64_encoded}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/echo",
+        "query_string": b"",
+        "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+    }
+
+    receive = make_asgi_receive("café €".encode())
+    send, captured = make_asgi_send()
+
+    # WHEN called via ASGI interface with a UTF-8 text body
+    await app(scope, receive, send)
+
+    # THEN the body is passed as text, as before
+    assert captured["status_code"] == 200
+    assert json.loads(captured["body"]) == {"body": "café €", "is_base64_encoded": False}
 
 
 @pytest.mark.asyncio

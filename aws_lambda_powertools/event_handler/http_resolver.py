@@ -40,6 +40,27 @@ class HttpHeadersSerializer(BaseHeadersSerializer):
         return {"headers": combined_headers, "cookies": cookie_headers}
 
 
+def _normalize_body(body: str | bytes | None, content_type: str) -> tuple[str | None, bool]:
+    """
+    Return the request body as a string, and whether it is base64-encoded.
+
+    Bodies that aren't valid UTF-8 are base64-encoded, as API Gateway and Lambda function URLs
+    do for binary payloads, so the raw bytes reach the handler unchanged. multipart/form-data
+    bodies are always base64-encoded: they can mix text and binary parts, and the multipart
+    parser expects them encoded.
+    """
+    if not isinstance(body, bytes):
+        return body, False
+
+    if not content_type.startswith("multipart/form-data"):
+        try:
+            return body.decode("utf-8"), False
+        except UnicodeDecodeError:
+            pass
+
+    return base64.b64encode(body).decode(), True
+
+
 class HttpProxyEvent(BaseProxyEvent):
     """
     A proxy event that wraps native HTTP request data.
@@ -67,9 +88,7 @@ class HttpProxyEvent(BaseProxyEvent):
             query_params = {k: v[-1] for k, v in parsed.items()}
 
         # Normalize body to string
-        body_str = None
-        if body is not None:
-            body_str = body.decode("utf-8") if isinstance(body, bytes) else body
+        body_str, is_base64_encoded = _normalize_body(body, (headers or {}).get("content-type", ""))
 
         # Build the internal dict structure that BaseProxyEvent expects
         data = {
@@ -77,7 +96,7 @@ class HttpProxyEvent(BaseProxyEvent):
             "path": path,
             "headers": headers or {},
             "body": body_str,
-            "isBase64Encoded": False,
+            "isBase64Encoded": is_base64_encoded,
             "queryStringParameters": query_params,
             "multiValueQueryStringParameters": multi_query_params,
             "pathParameters": path_parameters or {},

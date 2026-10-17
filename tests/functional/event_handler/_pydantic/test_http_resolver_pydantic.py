@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import warnings
 from typing import Annotated, Any
 
 import pytest
@@ -12,7 +13,7 @@ from pydantic import BaseModel, Field
 from aws_lambda_powertools.event_handler import HttpResolverLocal
 from aws_lambda_powertools.event_handler.api_gateway import BaseRouter, Router
 from aws_lambda_powertools.event_handler.http_resolver import MockLambdaContext
-from aws_lambda_powertools.event_handler.openapi.params import Query
+from aws_lambda_powertools.event_handler.openapi.params import File, Form, Query, UploadFile
 
 # =============================================================================
 # ASGI Test Helpers
@@ -320,6 +321,101 @@ async def test_sync_handler_invalid_response_returns_422_via_asgi():
 
     # THEN it returns 422 for invalid response
     assert captured["status_code"] == 422
+
+
+# =============================================================================
+# File Upload Tests
+# =============================================================================
+
+
+def make_multipart_scope(boundary: str) -> dict[str, Any]:
+    return {
+        "type": "http",
+        "method": "POST",
+        "path": "/upload",
+        "query_string": b"",
+        "headers": [(b"content-type", f"multipart/form-data; boundary={boundary}".encode())],
+    }
+
+
+@pytest.mark.asyncio
+async def test_asgi_file_upload_with_binary_content():
+    # GIVEN an app with Form() and File() parameters
+    app = HttpResolverLocal(enable_validation=True)
+
+    @app.post("/upload")
+    def upload(description: Annotated[str, Form()], file_data: Annotated[UploadFile, File()]):
+        return {"description": description, "filename": file_data.filename, "size": len(file_data)}
+
+    binary_content = b"\x89PNG\r\n\x1a\n\x00\xff"  # not valid UTF-8
+    boundary = "----TestBoundary"
+    body = (
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="description"\r\n'
+            "\r\n"
+            "logo\r\n"
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file_data"; filename="logo.png"\r\n'
+            "Content-Type: image/png\r\n"
+            "\r\n"
+        ).encode()
+        + binary_content
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+
+    receive = make_asgi_receive(body)
+    send, captured = make_asgi_send()
+
+    # WHEN a multipart request with binary file content is sent via ASGI
+    await app(make_multipart_scope(boundary), receive, send)
+
+    # THEN the file reaches the handler unchanged
+    assert captured["status_code"] == 200
+    assert json.loads(captured["body"]) == {
+        "description": "logo",
+        "filename": "logo.png",
+        "size": len(binary_content),
+    }
+
+
+@pytest.mark.asyncio
+async def test_asgi_multipart_form_with_non_ascii_text():
+    # GIVEN an app with Form() and File() parameters
+    app = HttpResolverLocal(enable_validation=True)
+
+    @app.post("/upload")
+    def upload(description: Annotated[str, Form()], file_data: Annotated[bytes, File()]):
+        return {"description": description, "content": file_data.decode("utf-8")}
+
+    boundary = "----TestBoundary"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="description"\r\n'
+        "\r\n"
+        "café\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file_data"; filename="price.txt"\r\n'
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        "price: 5€\r\n"
+        f"--{boundary}--\r\n"
+    ).encode()
+
+    receive = make_asgi_receive(body)
+    send, captured = make_asgi_send()
+
+    # WHEN a multipart request with UTF-8 text is sent via ASGI
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        await app(make_multipart_scope(boundary), receive, send)
+
+    # THEN the text values reach the handler unchanged
+    assert captured["status_code"] == 200
+    assert json.loads(captured["body"]) == {"description": "café", "content": "price: 5€"}
+
+    # AND the API Gateway Binary Media Types warning is not emitted
+    assert not [w for w in caught if "Binary Media Types" in str(w.message)]
 
 
 # =============================================================================
