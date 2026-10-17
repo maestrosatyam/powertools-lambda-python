@@ -253,6 +253,48 @@ def test_route_context_is_cleared_after_resolve():
     assert app.context == {}
 
 
+def test_route_context_is_cleared_when_resolver_raises():
+    # GIVEN a resolver that raises an exception without a registered exception handler
+    app = AppSyncResolver()
+    event = {"typeName": "Query", "fieldName": "listLocations", "arguments": {"name": "value"}}
+
+    @app.resolver(field_name="listLocations")
+    def get_locations(name: str):
+        raise ValueError("boom")
+
+    # WHEN event resolution kicks in
+    app.append_context(is_admin=True)
+    with pytest.raises(ValueError, match="boom"):
+        app.resolve(event, {})
+
+    # THEN context should be cleared even though the resolver raised
+    assert app.context == {}
+
+
+def test_route_context_is_cleared_after_exception_handler():
+    # GIVEN a resolver that raises an exception handled by a registered exception handler
+    app = AppSyncResolver()
+    event = {"typeName": "Query", "fieldName": "listLocations", "arguments": {"name": "value"}}
+
+    @app.exception_handler(ValueError)
+    def handle_value_error(ex: ValueError):
+        return {"message": str(ex), "is_admin": app.context.get("is_admin")}
+
+    @app.resolver(field_name="listLocations")
+    def get_locations(name: str):
+        raise ValueError("boom")
+
+    # WHEN event resolution kicks in
+    app.append_context(is_admin=True)
+    result = app.resolve(event, {})
+
+    # THEN the exception handler can still read the context
+    assert result == {"message": "boom", "is_admin": True}
+
+    # AND context should be cleared afterwards
+    assert app.context == {}
+
+
 def test_router_has_access_to_app_context():
     # GIVEN
     app = AppSyncResolver()

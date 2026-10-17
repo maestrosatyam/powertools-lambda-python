@@ -147,6 +147,7 @@ class AppSyncResolver(Router):
         self.lambda_context = context
         Router.lambda_context = context
 
+        response: Any = None
         try:
             if isinstance(event, list):
                 Router.current_batch_event = [data_model(e) for e in event]
@@ -156,17 +157,17 @@ class AppSyncResolver(Router):
                 response = self._call_single_resolver(event=event, data_model=data_model)
         except Exception as exp:
             response_builder = self.exception_handler_manager.lookup_exception_handler(type(exp))
-            if response_builder:
-                return response_builder(exp)
-            raise
-
-        # We don't clear the context for coroutines because we don't have control over the event loop.
-        # If we clean the context immediately, it might not be available when the coroutine is actually executed.
-        # For single async operations, the context should be cleaned up manually after the coroutine completes.
-        # See: https://github.com/aws-powertools/powertools-lambda-python/issues/5290
-        # REVIEW: Review this support in Powertools V4
-        if not asyncio.iscoroutine(response):
-            self.clear_context()
+            if not response_builder:
+                raise
+            response = response_builder(exp)
+        finally:
+            # We don't clear the context for coroutines because we don't have control over the event loop.
+            # If we clean the context immediately, it might not be available when the coroutine is actually executed.
+            # For single async operations, the context should be cleaned up manually after the coroutine completes.
+            # See: https://github.com/aws-powertools/powertools-lambda-python/issues/5290
+            # REVIEW: Review this support in Powertools V4
+            if not asyncio.iscoroutine(response):
+                self.clear_context()
 
         return response
 

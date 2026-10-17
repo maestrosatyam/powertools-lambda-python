@@ -350,6 +350,28 @@ def test_bedrock_agent_function_append_context():
     assert not hasattr(app.context, "new_key")
 
 
+def test_bedrock_agent_function_clears_context_when_function_raises():
+    # GIVEN a Bedrock Agent Function resolver with a function that raises
+    app = BedrockAgentFunctionResolver()
+
+    @app.tool()
+    def failing_function():
+        raise ValueError("boom")
+
+    # WHEN calling the event handler with context appended
+    raw_event = load_event("bedrockAgentFunctionEvent.json")
+    raw_event["function"] = "failing_function"
+    app.append_context(user_id="12345")
+    result = app.resolve(raw_event, LambdaContext())
+
+    # THEN an error response is returned
+    response_body = result["response"]["functionResponse"]["responseBody"]["TEXT"]["body"]
+    assert response_body == json.dumps("Error: ValueError: boom")
+
+    # AND the context is cleared even though the function raised
+    assert app.context == {}
+
+
 def test_resolve_with_no_current_event():
     """Test that _resolve() raises ValueError when current_event is None"""
     # GIVEN a Bedrock Agent Function resolver with no current event

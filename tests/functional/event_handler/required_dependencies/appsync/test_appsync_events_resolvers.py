@@ -491,6 +491,55 @@ def test_context_cleared_after_resolution(lambda_context, mock_event):
     assert app.context == {}
 
 
+def test_context_cleared_when_publish_raises_unauthorized_exception(lambda_context, mock_event):
+    """Test that context is cleared when a publish resolver rejects the request."""
+    # GIVEN a sample publish event
+    event = deepcopy(mock_event)
+    event["info"]["operation"] = "PUBLISH"
+    event["info"]["channel"]["path"] = "/default/test"
+    event["events"] = [
+        {"id": "123", "payload": {"data": "test data"}},
+    ]
+
+    # GIVEN an AppSyncEventsResolver with context data
+    app = AppSyncEventsResolver()
+    app.append_context(user_id="test-user")
+
+    @app.on_publish(path="/default/*", aggregate=True)
+    def handle_events(payload):
+        raise UnauthorizedException
+
+    # WHEN we resolve the event with unauthorized route
+    with pytest.raises(UnauthorizedException):
+        app.resolve(event, lambda_context)
+
+    # THEN the context should be cleared afterward
+    assert app.context == {}
+
+
+def test_context_cleared_when_subscribe_raises_unauthorized_exception(lambda_context, mock_event):
+    """Test that context is cleared when a subscribe resolver rejects the request."""
+    # GIVEN a sample subscribe event
+    event = deepcopy(mock_event)
+    event["info"]["operation"] = "SUBSCRIBE"
+    event["info"]["channel"]["path"] = "/default/test"
+
+    # GIVEN an AppSyncEventsResolver with context data
+    app = AppSyncEventsResolver()
+    app.append_context(user_id="test-user")
+
+    @app.on_subscribe(path="/default/*")
+    def handle_subscribe():
+        raise UnauthorizedException
+
+    # WHEN we resolve the event with unauthorized route
+    with pytest.raises(UnauthorizedException):
+        app.resolve(event, lambda_context)
+
+    # THEN the context should be cleared afterward
+    assert app.context == {}
+
+
 def test_path_matching_mechanism(mocker, lambda_context, mock_event):
     """Test the path matching mechanism for resolvers."""
 

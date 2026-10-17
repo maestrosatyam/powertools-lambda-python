@@ -129,12 +129,13 @@ class AppSyncEventsResolver(Router):
 
         self._setup_context(event, context)
 
-        if self.current_event.info.operation == "PUBLISH":
-            response = self._publish_events(payload=self.current_event.events)
-        else:
-            response = self._subscribe_events()
-
-        self.clear_context()
+        try:
+            if self.current_event.info.operation == "PUBLISH":
+                response = self._publish_events(payload=self.current_event.events)
+            else:
+                response = self._subscribe_events()
+        finally:
+            self.clear_context()
 
         return response
 
